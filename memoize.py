@@ -107,7 +107,7 @@ import psutil
 
 MEMOIZED_FUNCS = set()
 CACHES = []
-MASTER_CACHE = []
+MASTER_CACHE = deque()
 MASTER_LOCK = RLock()
 TARGET_MEMORY_USE_RATIO = 1.0
 
@@ -236,7 +236,7 @@ def shrink_cache(memory_use_ratio=TARGET_MEMORY_USE_RATIO):
     with MASTER_LOCK:
         size_ratio = float((1.0 * _total_size(MASTER_CACHE)) / psutil.virtual_memory().free)
         if size_ratio > memory_use_ratio:
-            MASTER_CACHE = sorted(MASTER_CACHE, key=lambda i: i.score, reverse=True)
+            MASTER_CACHE = deque(sorted(MASTER_CACHE, key=lambda i: i.score, reverse=True))
         start = time.time()
         while size_ratio > memory_use_ratio and time.time() - start < 5:
             try:
