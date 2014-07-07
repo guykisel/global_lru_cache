@@ -1,5 +1,86 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+####################################################################################################
+#
+# The MIT License (MIT)
+#
+# Copyright (c) 2014 Guy Kisel
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#
+####################################################################################################
+#
+# This file incorporates work covered by the following copyrights and
+# permission notices:
+#
+####################################################################################################
+#
+# From http://micheles.googlecode.com/hg/decorator/documentation.html
+#
+# Copyright (c) 2005-2012, Michele Simionato All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without modification, are permitted
+# provided that the following conditions are met:
+#
+# Redistributions of source code must retain the above copyright notice, this list of
+# conditions and the following disclaimer. Redistributions in bytecode form must reproduce
+# the above copyright notice, this list of conditions and the following disclaimer in the
+# documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+# AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
+# OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+# ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+# OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+# OF SUCH DAMAGE.
+#
+####################################################################################################
+#
+# From http://code.activestate.com/recipes/577504/
+#
+# The MIT License (MIT)
+#
+# Copyright (c) 2010 Raymond Hettinger
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#
+####################################################################################################
+
 
 from __future__ import unicode_literals
 from __future__ import absolute_import
@@ -28,6 +109,7 @@ MEMOIZED_FUNCS = set()
 CACHES = []
 MASTER_CACHE = []
 MASTER_LOCK = RLock()
+TARGET_MEMORY_USE_RATIO = 1.0
 
 
 class CacheMonitor(threading.Thread):
@@ -53,11 +135,6 @@ def start_cache_monitor():
         MONITOR.start()
 
 
-def _free_memory_ratio():
-    """Return the ratio of free memory to used memory"""
-    return (100 - psutil.phymem_usage().percent) / 100
-
-
 @functools.total_ordering
 class CacheEntry(object):
     def __init__(self, func, key, duration, result, expiration=sys.maxint, *args, **kwargs):
@@ -70,6 +147,7 @@ class CacheEntry(object):
         self.time_to_expire = time.time() + self.expiration
         self.args = args
         self.kwargs = kwargs
+        self.size = _total_size(self._result)
 
     def __eq__(self, other):
         return self.score == other.score
@@ -80,9 +158,9 @@ class CacheEntry(object):
     def __hash__(self):
         return self.key
 
-    @property
-    def size(self):
-        return total_size(self._result)
+    def recalculate_size(self):
+        self.size = _total_size(self._result)
+        return self.size
 
     @property
     def age(self):
@@ -94,41 +172,15 @@ class CacheEntry(object):
 
     @property
     def result(self):
-        self.last_used = time.time()
         if time.time() > self.time_to_expire:
             self._result = self.func(*self.args, **self.kwargs)
+            self.recalculate_size()
             self.time_to_expire = time.time() + self.expiration
-            return self._result
+        self.last_used = time.time()
         return self._result
 
     def __repr__(self):
         return '{} {} {}'.format(self.func.__name__, self.key, self.score)
-
-
-
-#
-# originally from http://micheles.googlecode.com/hg/decorator/documentation.html
-#
-# Copyright (c) 2005-2012, Michele Simionato All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without modification, are permitted
-# provided that the following conditions are met:
-#
-# Redistributions of source code must retain the above copyright notice, this list of
-# conditions and the following disclaimer. Redistributions in bytecode form must reproduce
-# the above copyright notice, this list of conditions and the following disclaimer in the
-#  documentation and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
-# AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
-# OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-# ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
-# OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
-# OF SUCH DAMAGE.
-#
 
 
 def _memoize(func, *args, **kw):
@@ -146,11 +198,13 @@ def _memoize(func, *args, **kw):
         if not isinstance(args, collections.Hashable):
             result = func(*args, **kw)
             return result
-        if kw:  # frozenset is used to ensure hashability
+        if kw:
+            # frozenset is used to ensure hashability
             key = args, frozenset(kw.items())
         else:
             key = args
-        cache = func.cache  # attribute added by memoize
+        # func.cache attribute added by memoize
+        cache = func.cache
         try:
             if key in cache:
                 result = cache[key].result
@@ -160,12 +214,8 @@ def _memoize(func, *args, **kw):
             result = func(*args, **kw)
             return result
 
-        # the fancy logic below gives more cache space to slow functions.
-        # cache space is also adjusted based on available physical RAM.
-        # once a function exceeds its allocated space,
-        # cache data is randomly deleted
         start = time.time()
-        result = func(*args, **kw)  # stopwatched function call
+        result = func(*args, **kw)
         end = time.time()
         duration = end - start
 
@@ -175,21 +225,27 @@ def _memoize(func, *args, **kw):
         return result
 
 
-def shrink_cache():
+def shrink_cache(memory_use_ratio=TARGET_MEMORY_USE_RATIO):
+    """
+    Calculate the current size of our global cache, get the current size of free memory,
+    and delete cache entries until the ratio of cache size to free memory is under the
+    target ratio.
+    """
     global MASTER_CACHE
     global MASTER_LOCK
     with MASTER_LOCK:
-        size_ratio = float((1.0 * total_size(MASTER_CACHE)) / psutil.virtual_memory().free)
-        if size_ratio > 1.0:
+        size_ratio = float((1.0 * _total_size(MASTER_CACHE)) / psutil.virtual_memory().free)
+        if size_ratio > memory_use_ratio:
             MASTER_CACHE = sorted(MASTER_CACHE, key=lambda i: i.score, reverse=True)
         start = time.time()
-        while size_ratio > 1.0 and time.time() - start < 5:
+        while size_ratio > memory_use_ratio and time.time() - start < 5:
             try:
                 to_delete = MASTER_CACHE.pop()
             except IndexError:
                 break
             del to_delete.func.cache[to_delete.key]
-            size_ratio = (1.0 * total_size(MASTER_CACHE)) / psutil.virtual_memory().free
+            size_ratio = ((TARGET_MEMORY_USE_RATIO * _total_size(MASTER_CACHE)) /
+                          psutil.virtual_memory().free)
 
 
 def memoized(f):
@@ -205,33 +261,7 @@ def memoized(f):
     return decorator(_memoize, f)
 
 
-#
-# From http://code.activestate.com/recipes/577504/
-#
-# The MIT License (MIT)
-#
-# Copyright (c) 2010 Raymond Hettinger
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-#
-
-def total_size(o, handlers=None, verbose=False):
+def _total_size(o, handlers=None, verbose=False):
     """ Returns the approximate memory footprint an object and all of its contents.
 
     Automatically finds the contents of the following builtin containers and
