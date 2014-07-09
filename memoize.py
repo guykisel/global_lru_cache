@@ -141,8 +141,9 @@ class GlobalCache(object):
 
     @classmethod
     def memory_usage_ratio(cls):
-        return float(
-            1.0 * _total_size(cls._cache) / psutil.virtual_memory().free)
+        with cls._lock:
+            return float(
+                1.0 * _total_size(cls._cache) / psutil.virtual_memory().free)
 
 
     @classmethod
@@ -247,6 +248,9 @@ class CacheEntry(object):
         with self.func.lock:
             self.size = _total_size(self._result)
             return self.size
+
+    def __sizeof__(self):
+        return self.size
 
     @property
     def age(self):
