@@ -29,7 +29,7 @@
 # This file incorporates work covered by the following copyrights and
 # permission notices:
 #
-####################################################################################################
+# ###################################################################################################
 #
 # From http://micheles.googlecode.com/hg/decorator/documentation.html
 #
@@ -53,7 +53,7 @@
 # OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
 # OF SUCH DAMAGE.
 #
-####################################################################################################
+# ###################################################################################################
 #
 # From http://code.activestate.com/recipes/577504/
 #
@@ -142,8 +142,13 @@ class GlobalCache(object):
     @classmethod
     def memory_usage_ratio(cls):
         with cls._lock:
-            return float(
-                1.0 * _total_size(cls._cache) / psutil.virtual_memory().free)
+            ratio = float(
+                1.0 * _total_size(cls._cache) /
+                (psutil.virtual_memory().available - (
+                    psutil.virtual_memory().total / 10)))
+            if ratio < 0:
+                return sys.maxint
+            return ratio
 
 
     @classmethod
