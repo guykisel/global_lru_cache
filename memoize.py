@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-####################################################################################################
+# ###################################################################################################
 #
 # The MIT License (MIT)
 #
@@ -24,7 +24,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 #
-####################################################################################################
+# ###################################################################################################
 #
 # This file incorporates work covered by the following copyrights and
 # permission notices:
@@ -96,6 +96,8 @@ import random
 from sys import getsizeof, stderr
 from itertools import chain
 from collections import deque
+import os
+import gc
 
 try:
     from reprlib import repr
@@ -105,147 +107,170 @@ except ImportError:
 from decorator import decorator
 import psutil
 
-MEMOIZED_FUNCS = set()
-CACHES = []
-MASTER_CACHE = deque()
-MASTER_LOCK = RLock()
-TARGET_MEMORY_USE_RATIO = 1.0
+
+class GlobalCache(object):
+    _cache = deque()
+    _lock = RLock()
+    target_memory_use_ratio = .05
+    _monitor_thread = None
+    _stop_thread = threading.Event()
+
+    @classmethod
+    def shrink_cache(cls, target_memory_use_ratio=None):
+        """
+        Calculate the current size of our global cache, get the current size of free memory,
+        and delete cache entries until the ratio of cache size to free memory is under the
+        target ratio.
+        """
+        if not target_memory_use_ratio:
+            target_memory_use_ratio = cls.target_memory_use_ratio
+        with cls._lock:
+            if cls.memory_usage_ratio() > target_memory_use_ratio:
+                cls._cache = deque(
+                    sorted(cls._cache, key=lambda i: i.score, reverse=True))
+            start = time.time()
+            while (cls.memory_usage_ratio() > target_memory_use_ratio
+                   and time.time() - start < 1 and cls._cache):
+                try:
+                    to_delete = cls._cache.pop()
+                except IndexError:
+                    break
+                to_delete.delete()
+                to_delete = None
+                gc.collect()
+
+    @classmethod
+    def memory_usage_ratio(cls):
+        return float(
+            1.0 * _total_size(cls._cache) / psutil.virtual_memory().free)
 
 
-class CacheMonitor(threading.Thread):
-    """Thread to monitor cache size even when the main thread is blocked."""
+    @classmethod
+    def memoize(cls, func, *args, **kw):
+        """
+        Cache the results of calling func with args and kw. Return cached
+        results if possible. Maintain a dynamically sized cache based on
+        function execution time and the available free memory ratio.
 
-    def __init__(self):
-        threading.Thread.__init__(self)
-        self.daemon = True
+        You probably should use the memoized decorator instead of calling this
+        directly.
+        """
+        with func.lock, cls._lock:
+            if not isinstance(args, collections.Hashable):
+                result = func(*args, **kw)
+                return result
+            if kw:
+                # frozenset is used to ensure hashability
+                key = args, frozenset(kw.items())
+            else:
+                key = args
+            # func.cache attribute added by memoize
+            cache = func.cache
+            try:
+                if key in cache:
+                    result = cache[key].result
+                    cls.shrink_cache()
+                    return result
+            except TypeError:
+                result = func(*args, **kw)
+                return result
 
-    def run(self):
-        global MASTER_LOCK
-        while True:
-            with MASTER_LOCK:
-                shrink_cache()
+            start = time.time()
+            result = func(*args, **kw)
+            end = time.time()
+            duration = end - start
+
+            cache[key] = CacheEntry(func, key, duration, result,
+                                    kw.get('expiration'), *args, **kw)
+            cls.shrink_cache()
+            cls._cache.append(cache[key])
+            return result
+
+    @classmethod
+    def start_cache_monitor(cls):
+        cls._stop_thread.clear()
+        if not cls._monitor_thread:
+            cls._monitor_thread = threading.Thread(target=cls._monitor)
+        if not cls._monitor_thread.is_alive():
+            cls._monitor_thread.daemon = True
+            cls._monitor_thread.start()
+
+    @classmethod
+    def stop_cache_monitor(cls):
+        cls._stop_thread.set()
+
+    @classmethod
+    def _monitor(cls):
+        while not cls._stop_thread.is_set():
+            cls.shrink_cache()
             time.sleep(random.random() * 10)
 
-MONITOR = CacheMonitor()
 
-
-def start_cache_monitor():
-    """Make sure only one cache monitor can be running at a time."""
-    if not any(isinstance(thread, CacheMonitor) for thread in threading.enumerate()):
-        MONITOR.start()
+start_cache_monitor = GlobalCache.start_cache_monitor
+stop_cache_monitor = GlobalCache.stop_cache_monitor
+shrink_cache = GlobalCache.shrink_cache
 
 
 @functools.total_ordering
 class CacheEntry(object):
-    def __init__(self, func, key, duration, result, expiration=sys.maxint, *args, **kwargs):
+    def __init__(self, func, key, duration, result, expiration=sys.maxint,
+                 *args, **kwargs):
         self.func = func
-        self.key = key
-        self.duration = duration
-        self._result = result
-        self.last_used = time.time()
-        self.expiration = expiration or sys.maxint
-        self.time_to_expire = time.time() + self.expiration
-        self.args = args
-        self.kwargs = kwargs
-        self.size = _total_size(self._result)
+        with self.func.lock:
+            self.key = key
+            self.duration = duration
+            self._result = result
+            self.last_used = time.time()
+            self.expiration = expiration or sys.maxint
+            self.time_to_expire = time.time() + self.expiration
+            self.args = args
+            self.kwargs = kwargs
+            self.size = _total_size(self._result)
+
+    def delete(self):
+        with self.func.lock:
+            del self.func.cache[self.key]
 
     def __eq__(self, other):
-        return self.score == other.score
+        with self.func.lock:
+            return self.score == other.score
 
     def __lt__(self, other):
-        return self.score < other.score
+        with self.func.lock:
+            return self.score < other.score
 
     def __hash__(self):
-        return self.key
+        with self.func.lock:
+            return self.key
 
     def recalculate_size(self):
-        self.size = _total_size(self._result)
-        return self.size
+        with self.func.lock:
+            self.size = _total_size(self._result)
+            return self.size
 
     @property
     def age(self):
-        return time.time() - self.last_used
+        with self.func.lock:
+            return time.time() - self.last_used
 
     @property
     def score(self):
-        return (self.size * self.duration) / (self.age ** 2)
+        with self.func.lock:
+            return (self.size * self.duration) / (self.age ** 2)
 
     @property
     def result(self):
-        if time.time() > self.time_to_expire:
-            self._result = self.func(*self.args, **self.kwargs)
-            self.recalculate_size()
-            self.time_to_expire = time.time() + self.expiration
-        self.last_used = time.time()
-        return self._result
+        with self.func.lock:
+            if time.time() > self.time_to_expire:
+                self._result = self.func(*self.args, **self.kwargs)
+                self.recalculate_size()
+                self.time_to_expire = time.time() + self.expiration
+            self.last_used = time.time()
+            return self._result
 
     def __repr__(self):
-        return '{} {} {}'.format(self.func.__name__, self.key, self.score)
-
-
-def _memoize(func, *args, **kw):
-    """
-    Cache the results of calling func with args and kw. Return cached
-    results if possible. Maintain a dynamically sized cache based on
-    function execution time and the available free memory ratio.
-
-    You probably should use the memoized decorator instead of calling this
-    directly.
-    """
-    global MASTER_LOCK
-    global MASTER_CACHE
-    with func.lock, MASTER_LOCK:
-        if not isinstance(args, collections.Hashable):
-            result = func(*args, **kw)
-            return result
-        if kw:
-            # frozenset is used to ensure hashability
-            key = args, frozenset(kw.items())
-        else:
-            key = args
-        # func.cache attribute added by memoize
-        cache = func.cache
-        try:
-            if key in cache:
-                result = cache[key].result
-                shrink_cache()
-                return result
-        except TypeError:
-            result = func(*args, **kw)
-            return result
-
-        start = time.time()
-        result = func(*args, **kw)
-        end = time.time()
-        duration = end - start
-
-        cache[key] = CacheEntry(func, key, duration, result, kw.get('expiration'), *args, **kw)
-        shrink_cache()
-        MASTER_CACHE.append(cache[key])
-        return result
-
-
-def shrink_cache(memory_use_ratio=TARGET_MEMORY_USE_RATIO):
-    """
-    Calculate the current size of our global cache, get the current size of free memory,
-    and delete cache entries until the ratio of cache size to free memory is under the
-    target ratio.
-    """
-    global MASTER_CACHE
-    global MASTER_LOCK
-    with MASTER_LOCK:
-        size_ratio = float((1.0 * _total_size(MASTER_CACHE)) / psutil.virtual_memory().free)
-        if size_ratio > memory_use_ratio:
-            MASTER_CACHE = deque(sorted(MASTER_CACHE, key=lambda i: i.score, reverse=True))
-        start = time.time()
-        while size_ratio > memory_use_ratio and time.time() - start < 5:
-            try:
-                to_delete = MASTER_CACHE.pop()
-            except IndexError:
-                break
-            del to_delete.func.cache[to_delete.key]
-            size_ratio = ((TARGET_MEMORY_USE_RATIO * _total_size(MASTER_CACHE)) /
-                          psutil.virtual_memory().free)
+        with self.func.lock:
+            return '{} {} {}'.format(self.func.__name__, self.key, self.score)
 
 
 def memoized(f):
@@ -258,7 +283,7 @@ def memoized(f):
     """
     f.cache = {}
     f.lock = RLock()
-    return decorator(_memoize, f)
+    return decorator(GlobalCache.memoize, f)
 
 
 def _total_size(o, handlers=None, verbose=False):
