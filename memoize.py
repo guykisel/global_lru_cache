@@ -122,10 +122,12 @@ class GlobalCache(object):
         and delete cache entries until the ratio of cache size to free memory is under the
         target ratio.
         """
+        cleanup = False
         if not target_memory_use_ratio:
             target_memory_use_ratio = cls.target_memory_use_ratio
         with cls._lock:
             if cls.memory_usage_ratio() > target_memory_use_ratio:
+                cleanup = True
                 cls._cache = deque(
                     sorted(cls._cache, key=lambda i: i.score, reverse=True))
             start = time.time()
@@ -137,6 +139,7 @@ class GlobalCache(object):
                     break
                 to_delete.delete()
                 to_delete = None
+            if cleanup:
                 gc.collect()
 
     @classmethod
