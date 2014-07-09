@@ -111,7 +111,7 @@ import psutil
 class GlobalCache(object):
     _cache = deque()
     _lock = RLock()
-    target_memory_use_ratio = .05
+    target_memory_use_ratio = 1.0
     _monitor_thread = None
     _stop_thread = threading.Event()
 
