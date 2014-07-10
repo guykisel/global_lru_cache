@@ -130,6 +130,9 @@ class GlobalCache(object):
 
     @classmethod
     def clear_cache(cls):
+        """
+        Clear all of the existing cache entries.
+        """
         monitor_running = False
         if cls._monitor_thread:
             monitor_running = cls._monitor_thread.is_alive()
@@ -167,6 +170,12 @@ class GlobalCache(object):
 
     @classmethod
     def memory_usage_ratio(cls):
+        """
+        Calculate the ratio of used RAM to available RAM.
+
+        The ratio is designed to reserve at least a tenth of available
+        system memory no matter what.
+        """
         with cls._lock:
             ratio = float(
                 1.0 * _total_size(cls._cache) /
@@ -175,7 +184,6 @@ class GlobalCache(object):
             if ratio < 0:
                 return sys.maxint
             return ratio
-
 
     @classmethod
     def memoize(cls, func, *args, **kw):
@@ -220,6 +228,13 @@ class GlobalCache(object):
 
     @classmethod
     def start_cache_monitor(cls):
+        """
+        Start a thread that will monitor memory usage and occasionally shrink the cache.
+
+        Useful if you have some very slow blocking functionality in your code
+        or if you won't be calling cached functions often. Only one cache
+        monitor will ever run at a time.
+        """
         with cls._monitor_lock:
             cls._stop_thread.clear()
             if not cls._monitor_thread:
@@ -230,6 +245,9 @@ class GlobalCache(object):
 
     @classmethod
     def stop_cache_monitor(cls):
+        """
+        Stop the cache monitor thread. Blocks until the thread stops.
+        """
         with cls._monitor_lock:
             cls._stop_thread.set()
             cls._monitor_thread.join()
@@ -237,6 +255,9 @@ class GlobalCache(object):
 
     @classmethod
     def _monitor(cls):
+        """
+        Target method of cache monitor thread.
+        """
         while not cls._stop_thread.is_set():
             cls.shrink_cache()
             time.sleep(random.random() * 10)
@@ -245,6 +266,7 @@ class GlobalCache(object):
 start_cache_monitor = GlobalCache.start_cache_monitor
 stop_cache_monitor = GlobalCache.stop_cache_monitor
 shrink_cache = GlobalCache.shrink_cache
+clear_cache = GlobalCache.clear_cache
 
 
 @functools.total_ordering
