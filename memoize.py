@@ -121,6 +121,12 @@ def memoized(f):
 
 
 class GlobalCache(object):
+    """
+    Global cache. Implemented as a singleton.
+
+    I know, singletons are terrible. However, system RAM is basically a
+    singleton, so the cache might as well be one too. 
+    """
     _cache = deque()
     _lock = RLock()
     target_memory_use_ratio = 1.0
