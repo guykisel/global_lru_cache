@@ -96,7 +96,6 @@ import random
 from sys import getsizeof, stderr
 from itertools import chain
 from collections import deque
-import os
 import gc
 
 try:
@@ -108,12 +107,38 @@ from decorator import decorator
 import psutil
 
 
+def memoized(f):
+    """
+    Memoize the decorated function.
+
+    @memoized
+    def foo(bar):
+        return bar
+    """
+    f.cache = {}
+    f.lock = RLock()
+    return decorator(GlobalCache.memoize, f)
+
+
 class GlobalCache(object):
     _cache = deque()
     _lock = RLock()
     target_memory_use_ratio = 1.0
     _monitor_thread = None
     _stop_thread = threading.Event()
+    _monitor_lock = RLock()
+
+    @classmethod
+    def clear_cache(cls):
+        monitor_running = False
+        if cls._monitor_thread:
+            monitor_running = cls._monitor_thread.is_alive()
+            cls.stop_cache_monitor()
+        with cls._monitor_lock, cls._lock:
+            while cls._cache:
+                cls._cache.pop().delete()
+        if monitor_running:
+            cls.start_cache_monitor()
 
     @classmethod
     def shrink_cache(cls, target_memory_use_ratio=None):
@@ -134,11 +159,9 @@ class GlobalCache(object):
             while (cls.memory_usage_ratio() > target_memory_use_ratio
                    and time.time() - start < 1 and cls._cache):
                 try:
-                    to_delete = cls._cache.pop()
+                    cls._cache.pop().delete()
                 except IndexError:
                     break
-                to_delete.delete()
-                to_delete = None
             if cleanup:
                 gc.collect()
 
@@ -197,16 +220,20 @@ class GlobalCache(object):
 
     @classmethod
     def start_cache_monitor(cls):
-        cls._stop_thread.clear()
-        if not cls._monitor_thread:
-            cls._monitor_thread = threading.Thread(target=cls._monitor)
-        if not cls._monitor_thread.is_alive():
-            cls._monitor_thread.daemon = True
-            cls._monitor_thread.start()
+        with cls._monitor_lock:
+            cls._stop_thread.clear()
+            if not cls._monitor_thread:
+                cls._monitor_thread = threading.Thread(target=cls._monitor)
+            if not cls._monitor_thread.is_alive():
+                cls._monitor_thread.daemon = True
+                cls._monitor_thread.start()
 
     @classmethod
     def stop_cache_monitor(cls):
-        cls._stop_thread.set()
+        with cls._monitor_lock:
+            cls._stop_thread.set()
+            cls._monitor_thread.join()
+            cls._monitor_thread = None
 
     @classmethod
     def _monitor(cls):
@@ -283,19 +310,6 @@ class CacheEntry(object):
     def __repr__(self):
         with self.func.lock:
             return '{} {} {}'.format(self.func.__name__, self.key, self.score)
-
-
-def memoized(f):
-    """
-    Memoize the decorated function.
-
-    @memoized
-    def foo(bar):
-        return bar
-    """
-    f.cache = {}
-    f.lock = RLock()
-    return decorator(GlobalCache.memoize, f)
 
 
 def _total_size(o, handlers=None, verbose=False):
