@@ -115,8 +115,9 @@ def memoized(f):
     def foo(bar):
         return bar
     """
-    f.cache = {}
-    f.lock = RLock()
+    GlobalCache._caches[f] = {}
+    GlobalCache._locks[f] = RLock()
+
     return decorator(GlobalCache.memoize, f)
 
 
@@ -125,7 +126,7 @@ class GlobalCache(object):
     Global cache. Implemented as a singleton.
 
     I know, singletons are terrible. However, system RAM is basically a
-    singleton, so the cache might as well be one too. 
+    singleton, so the cache might as well be one too.
     """
     _cache = deque()
     _lock = RLock()
@@ -133,6 +134,8 @@ class GlobalCache(object):
     _monitor_thread = None
     _stop_thread = threading.Event()
     _monitor_lock = RLock()
+    _caches = dict()
+    _locks = dict()
 
     @classmethod
     def clear_cache(cls):
@@ -201,7 +204,7 @@ class GlobalCache(object):
         You probably should use the memoized decorator instead of calling this
         directly.
         """
-        with func.lock, cls._lock:
+        with cls._locks[func], cls._lock:
             if not isinstance(args, collections.Hashable):
                 result = func(*args, **kw)
                 return result
@@ -211,7 +214,7 @@ class GlobalCache(object):
             else:
                 key = args
             # func.cache attribute added by memoize
-            cache = func.cache
+            cache = cls._caches[func]
             try:
                 if key in cache:
                     result = cache[key].result
@@ -280,7 +283,8 @@ class CacheEntry(object):
     def __init__(self, func, key, duration, result, expiration=sys.maxint,
                  *args, **kwargs):
         self.func = func
-        with self.func.lock:
+        self.lock = GlobalCache._locks[func]
+        with self.lock:
             self.key = key
             self.duration = duration
             self._result = result
@@ -292,23 +296,23 @@ class CacheEntry(object):
             self.size = _total_size(self._result)
 
     def delete(self):
-        with self.func.lock:
+        with self.lock:
             del self.func.cache[self.key]
 
     def __eq__(self, other):
-        with self.func.lock:
+        with self.lock:
             return self.score == other.score
 
     def __lt__(self, other):
-        with self.func.lock:
+        with self.lock:
             return self.score < other.score
 
     def __hash__(self):
-        with self.func.lock:
+        with self.lock:
             return self.key
 
     def recalculate_size(self):
-        with self.func.lock:
+        with self.lock:
             self.size = _total_size(self._result)
             return self.size
 
@@ -317,17 +321,17 @@ class CacheEntry(object):
 
     @property
     def age(self):
-        with self.func.lock:
+        with self.lock:
             return time.time() - self.last_used
 
     @property
     def score(self):
-        with self.func.lock:
+        with self.lock:
             return (self.size * self.duration) / (self.age ** 2)
 
     @property
     def result(self):
-        with self.func.lock:
+        with self.lock:
             if time.time() > self.time_to_expire:
                 self._result = self.func(*self.args, **self.kwargs)
                 self.recalculate_size()
