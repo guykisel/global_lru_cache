@@ -15,7 +15,7 @@ except IOError:
 
 setup(
     name='global_lru_cache',
-    packages=['memoize'],  # this must be the same as the name above
+    packages=['global_lru_cache'],  # this must be the same as the name above
     version='1.0',
     description=short_description,
     author='Guy Kisel',
