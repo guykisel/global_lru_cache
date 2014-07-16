@@ -4,6 +4,11 @@ global_lru_cache
 Python global LRU cache memoization decorator.
 
 
+Installation
+--------------------
+`pip install global_lru_cache`
+
+
 What is a global LRU cache?
 ================
 There are a lot of great Python LRU caches available. Python 3 has [functools.lru_cache](https://docs.python.org/3/library/functools.html#functools.lru_cache) built in, and it's also been [backported to Python 2](http://code.activestate.com/recipes/578078-py26-and-py30-backport-of-python-33s-lru-cache/). There's also [pylru](https://github.com/jlhutch/pylru), [cachetools](https://github.com/tkem/cachetools), [lru-dict](https://github.com/amitdev/lru-dict), [repoze.lru](https://github.com/repoze/repoze.lru), and more out there. 
@@ -16,7 +21,7 @@ I was unable to find an existing implementation of such a cache, so I've taken s
 Usage
 ================
 ```python
-from memoize import memoized
+from global_lru_cache import memoized
 
 @memoized
 def slow_function(arg1, arg2):
