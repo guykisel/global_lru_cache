@@ -3,6 +3,8 @@ global_lru_cache
 
 Python global LRU cache memoization decorator.
 
+Note: I'm no longer using or maintaining this module. I now think that a global LRU cache is generally a pretty terrible idea. Still, it was a fun project, so I might as well leave it here for reference.
+
 
 Installation
 --------------------
